@@ -11,3 +11,4 @@ docker push $GITHUB_REPOSITORY
 docker push $GITHUB_REPOSITORY:$1
 #docker push selenoid/hub:$1
 #docker push aandryashin/selenoid:$1
+#push
