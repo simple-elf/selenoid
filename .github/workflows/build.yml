@@ -23,8 +23,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Test
-        run: ci/test.sh
+      #      - name: Test
+      #        run: ci/test.sh
 
       - name: Build
         run: ci/build.sh
@@ -35,7 +35,7 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: ci/docker-push.sh latest
 
-      - name: Latest docs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ci/docs.sh latest ${{ secrets.GITHUB_TOKEN }}
+#      - name: Latest docs
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        run: ci/docs.sh latest ${{ secrets.GITHUB_TOKEN }}
