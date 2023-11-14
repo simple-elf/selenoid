@@ -143,16 +143,20 @@ func (d *Docker) StartWithCancel() (*StartedService, error) {
 	}
 	cl := d.Client
 	env := getEnv(d.ServiceBase, d.Caps)
+	cfg := &ctr.Config{
+		Image:        image.(string),
+		Env:          env,
+		ExposedPorts: portConfig.ExposedPorts,
+		Labels:       getLabels(d.Service, d.Caps),
+	}
+	hn := getContainerHostname(d.Caps)
+	if hn != "" {
+		cfg.Hostname = hn
+	}
 	container, err := cl.ContainerCreate(ctx,
-		&ctr.Config{
-			Hostname:     getContainerHostname(d.Caps),
-			Image:        image.(string),
-			Env:          env,
-			ExposedPorts: portConfig.ExposedPorts,
-			Labels:       getLabels(d.Service, d.Caps),
-		},
+		cfg,
 		&hostConfig,
-		&network.NetworkingConfig{}, "")
+		&network.NetworkingConfig{}, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("create container: %v", err)
 	}
@@ -221,6 +225,11 @@ func (d *Docker) StartWithCancel() (*StartedService, error) {
 		publishedPortsInfo = getContainerPorts(stat)
 	}
 
+	var origin string
+	if stat.Config != nil {
+		origin = net.JoinHostPort(stat.Config.Hostname, d.Service.Port)
+	}
+
 	s := StartedService{
 		Url: u,
 		Container: &session.Container{
@@ -229,6 +238,7 @@ func (d *Docker) StartWithCancel() (*StartedService, error) {
 			Ports:     publishedPortsInfo,
 		},
 		HostPort: hostPort,
+		Origin:   origin,
 		Cancel: func() {
 			if videoContainerId != "" {
 				stopVideoContainer(ctx, cl, requestId, videoContainerId, d.Environment)
@@ -399,7 +409,7 @@ func getContainerHostname(caps session.Caps) string {
 	if caps.ContainerHostname != "" {
 		return caps.ContainerHostname
 	}
-	return "localhost"
+	return ""
 }
 
 func getExtraHosts(service *config.Browser, caps session.Caps) []string {
@@ -527,7 +537,7 @@ func startVideoContainer(ctx context.Context, cl *client.Client, requestId uint6
 			Env:   env,
 		},
 		hostConfig,
-		&network.NetworkingConfig{}, "")
+		&network.NetworkingConfig{}, nil, "")
 	if err != nil {
 		removeContainer(ctx, cl, requestId, browserContainer.ID)
 		return "", fmt.Errorf("create video container: %v", err)

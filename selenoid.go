@@ -200,6 +200,10 @@ func create(w http.ResponseWriter, r *http.Request) {
 	}
 	u := startedService.Url
 	cancel := startedService.Cancel
+	host := "localhost"
+	if startedService.Origin != "" {
+		host = startedService.Origin
+	}
 
 	var resp *http.Response
 	i := 1
@@ -211,7 +215,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 		if len(contentType) > 0 {
 			req.Header.Set("Content-Type", contentType)
 		}
-		req.Host = "localhost"
+		req.Host = host
 		ctx, done := context.WithTimeout(r.Context(), newSessionAttemptTimeout)
 		defer done()
 		log.Printf("[%d] [SESSION_ATTEMPTED] [%s] [%d]", requestId, u.String(), i)
@@ -277,12 +281,25 @@ func create(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(resp.StatusCode)
 		}
 	} else {
-		tee := io.TeeReader(resp.Body, w)
-		w.WriteHeader(resp.StatusCode)
-		json.NewDecoder(tee).Decode(&s)
-		if s.ID == "" {
-			s.ID = s.Value.ID
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[%d] [ERROR_READING_RESPONSE] [%v]", requestId, err)
+			queue.Drop()
+			cancel()
+			return
 		}
+		newBody, sessionId, err := processBody(body, r.Host)
+		if err != nil {
+			log.Printf("[%d] [ERROR_PROCESSING_RESPONSE] [%v]", requestId, err)
+			queue.Drop()
+			cancel()
+			return
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(newBody))
+		resp.ContentLength = int64(len(newBody))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(newBody)
+		s.ID = sessionId
 	}
 	if s.ID == "" {
 		log.Printf("[%d] [SESSION_FAILED] [%s] [%s]", requestId, u.String(), resp.Status)
@@ -296,6 +313,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 		URL:       u,
 		Container: startedService.Container,
 		HostPort:  startedService.HostPort,
+		Origin:    startedService.Origin,
 		Timeout:   sessionTimeout,
 		TimeoutCh: onTimeout(sessionTimeout, func() {
 			request{r}.session(s.ID).Delete(requestId)
@@ -386,6 +404,37 @@ func removeSelenoidOptions(input []byte) []byte {
 	}
 	ret, _ := json.Marshal(body)
 	return ret
+}
+
+func processBody(input []byte, host string) ([]byte, string, error) {
+	body := make(map[string]interface{})
+	sessionId := ""
+	err := json.Unmarshal(input, &body)
+	if err != nil {
+		return nil, sessionId, fmt.Errorf("parse body response: %v", err)
+	}
+	// handle jsonwp response from older browsers (chrome < 75)
+	if rawId, ok := body["sessionId"]; ok {
+		if si, ok := rawId.(string); ok {
+			sessionId = si
+		}
+	} else {
+		if raw, ok := body["value"]; ok {
+			if v, ok := raw.(map[string]interface{}); ok {
+				if raw, ok := v["capabilities"]; ok {
+					if c, ok := raw.(map[string]interface{}); ok {
+						sessionId = v["sessionId"].(string)
+						c["se:cdp"] = fmt.Sprintf("ws://%s/devtools/%s/", host, sessionId)
+					}
+				}
+			}
+		}
+	}
+	ret, err := json.Marshal(body)
+	if err != nil {
+		return nil, sessionId, fmt.Errorf("marshal response: %v", err)
+	}
+	return ret, sessionId, nil
 }
 
 func preprocessSessionId(sid string) string {
@@ -528,6 +577,9 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 				}
 				r.URL.Host, r.URL.Path = sess.URL.Host, path.Clean(sess.URL.Path+r.URL.Path)
 				r.Host = "localhost"
+				if sess.Origin != "" {
+					r.Host = sess.Origin
+				}
 				return
 			}
 			r.URL.Path = paths.Error
