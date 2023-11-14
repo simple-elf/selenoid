@@ -1,5 +1,5 @@
 //go:build s3
-// +build s3
+// +build s3 //force
 
 package main
 
